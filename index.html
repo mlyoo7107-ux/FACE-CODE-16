@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>얼굴형 · 얼굴무드 진단 | COLOR·M</title>
+<link rel="icon" href="./colorm-logo.png">
+<style>
+  :root { --bg:#f6f4f8; --panel:#fff; --text:#17131d; --muted:#6f6878; --line:#e7e1ec; --accent:#5b3f8c; --accent-soft:#eee8f7;
+          --ok:#2f7d5b; --warn:#b7791f; --bad:#c0392b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:Pretendard,"Noto Sans KR","Malgun Gothic",system-ui,sans-serif; color:var(--text); background:var(--bg); line-height:1.55; }
+  .wrap { max-width:1240px; margin:0 auto; padding:24px 16px 80px; }
+  header { padding:6px 0 18px; }
+  .eyebrow { font-size:13px; color:var(--accent); font-weight:800; letter-spacing:.08em; }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .brand .logo { height:44px; width:auto; display:block; mix-blend-mode:multiply; }
+  .brand .eyebrow { padding-left:12px; border-left:2px solid var(--line); }
+  h1 { font-size:28px; line-height:1.2; margin:6px 0 8px; }
+  .lead { margin:0; color:var(--muted); font-size:14px; }
+  .test-note { display:inline-block; margin-top:10px; font-size:13px; font-weight:700; color:#b7791f; background:#fbf0dc; border-radius:999px; padding:4px 12px; }
+  @media print { .test-note { display:none; } }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:18px; }
+  .top { display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap:16px; align-items:start; }
+  [hidden] { display:none !important; }
+  .rp-form { display:grid; grid-template-columns:repeat(3, minmax(0,1fr)); gap:10px; }
+  .rp-form label { display:flex; flex-direction:column; gap:4px; font-size:13px; font-weight:700; color:var(--muted); }
+  .rp-form .wide { grid-column:1 / -1; }
+  .panel.customer { margin-bottom:16px; padding:12px 18px; }
+  .rp-form input, .rp-form textarea { font:inherit; font-size:14px; color:var(--text); border:1px solid var(--line); border-radius:10px; padding:8px 10px; background:#fff; }
+  #rpPreview { margin-top:14px; overflow-x:auto; }
+  #rpPreview:not(:empty) { border:1px solid var(--line); border-radius:14px; background:#f6f4f8; padding:10px; }
+  @media (max-width: 620px) { .rp-form { grid-template-columns:1fr; } }
+  /* 인쇄할 때는 레포트만 A4로 */
+  @page { size: A4; margin: 0; }
+  @media print {
+    body { background:#fff; }
+    .wrap { padding:0; max-width:none; }
+    .wrap > *:not(#reportPanel) { display:none !important; }
+    #reportPanel { border:none; padding:0; margin:0 !important; }
+    #reportPanel > *:not(#rpPreview) { display:none !important; }
+    #rpPreview { border:none !important; padding:0 !important; background:#fff !important; overflow:visible; }
+    .rpt { min-height:0 !important; box-shadow:none !important; margin:0 !important; }
+  }
+  .photo-box { min-width:0; }
+  .stage { width:100%; }
+  .stage.zoomed { overflow:auto; max-height:560px; background:#faf9fb; border-radius:12px; }
+  .stage.zoomed canvas { max-width:none; max-height:none; margin:0; }
+  .stage.zoomed { cursor:grab; } .stage.panning, .stage.panning canvas { cursor:grabbing !important; }
+  .photo-box.expanded { position:fixed; inset:12px; z-index:100; display:flex; flex-direction:column; box-shadow:0 0 0 100vmax rgba(23,19,29,.55); }
+  .photo-box.expanded .stage { flex:1; min-height:0; max-height:none; overflow:auto; background:#faf9fb; border-radius:12px; }
+  .photo-box.expanded .stage canvas { margin:0 auto; }
+  .zoom-bar .hint { font-size:12px; }
+  .zoom-bar .close-btn { margin-left:auto; }
+  .photo-box.expanded canvas { max-width:none; max-height:none; }
+  .photo-box.expanded #pResult { display:none; }
+  .zoom-bar { display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+  .zoom-bar .zv { min-width:48px; text-align:center; font-weight:800; font-size:13px; }
+  body.noscroll { overflow:hidden; }
+  .photo-title { font-weight:800; font-size:15px; margin-bottom:10px; display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
+  @media (max-width: 1100px) { .top { grid-template-columns: 1fr 1fr; } #qPanel { grid-column: 1 / -1; } }
+  .photo-box { position:relative; }
+  .drop { border:2px dashed var(--line); border-radius:14px; padding:28px 14px; text-align:center; color:var(--muted); cursor:pointer; font-size:14px; }
+  .drop.over { border-color:var(--accent); background:var(--accent-soft); }
+  canvas { max-width:100%; max-height:560px; width:auto; height:auto; margin:0 auto; border-radius:12px; display:block; background:#faf9fb; touch-action:none; }
+  .btns { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  button { font:inherit; font-size:13px; font-weight:700; border:1px solid var(--line); background:#fff; color:var(--text); border-radius:10px; padding:8px 12px; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  .status { font-size:13px; color:var(--muted); margin-top:10px; }
+  .status.err { color:var(--bad); }
+  .q { display:flex; gap:10px; align-items:flex-start; }
+  .badge { display:inline-block; font-size:12px; font-weight:800; padding:2px 9px; border-radius:999px; background:var(--accent-soft); color:var(--accent); white-space:nowrap; }
+  .badge.high { background:#e3f3ea; color:var(--ok); } .badge.mid { background:#fbf0dc; color:var(--warn); } .badge.low { background:#fbe3e0; color:var(--bad); }
+  .muted { color:var(--muted); font-size:13px; }
+  ul.tight { margin:4px 0 0; padding-left:18px; font-size:13px; color:var(--muted); }
+
+  .results { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:16px; align-items:start; }
+  .res-head { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .res-head h2 { margin:0; font-size:20px; }
+  .res-head .num { width:28px; height:28px; border-radius:50%; background:var(--accent); color:#fff; font-weight:800; display:grid; place-items:center; font-size:14px; }
+  .hero { background:var(--accent-soft); border-radius:14px; padding:14px 16px; margin-bottom:14px; }
+  .hero .label { font-size:12px; color:var(--accent); font-weight:800; }
+  .hero .name { font-size:26px; font-weight:800; line-height:1.25; }
+  .hero .name small { font-size:14px; color:var(--muted); font-weight:600; margin-left:6px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:14px; margin-top:8px; }
+  .kv dt { color:var(--muted); } .kv dd { margin:0; font-weight:600; }
+  h3 { font-size:14px; margin:16px 0 6px; color:var(--accent); }
+  ol.reasons { margin:0; padding-left:20px; font-size:14px; }
+  ol.reasons li span { color:var(--muted); font-size:12px; margin-left:4px; }
+  table.meas { width:100%; border-collapse:collapse; font-size:13px; }
+  table.meas td { padding:5px 4px; border-bottom:1px solid var(--line); }
+  table.meas td:last-child { text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }
+  .bars .row { display:grid; grid-template-columns:64px 1fr 40px; gap:8px; align-items:center; font-size:13px; margin:3px 0; }
+  .bar { height:8px; background:#efebf3; border-radius:999px; overflow:hidden; }
+  .bar > div { height:100%; background:var(--accent); border-radius:999px; }
+  .bar.dim > div { background:#c9bfd9; }
+  .tip { font-size:14px; background:#faf9fb; border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+
+  .matrix { display:grid; grid-template-columns:44px repeat(3,1fr); gap:4px; font-size:12px; text-align:center; }
+  .matrix div { padding:7px 2px; border-radius:8px; background:#faf9fb; border:1px solid var(--line); }
+  .matrix .h { background:none; border:none; color:var(--muted); font-weight:700; }
+  .matrix .on { background:var(--accent); color:#fff; border-color:var(--accent); font-weight:800; }
+  .matrix .cand { border:2px dashed var(--accent); color:var(--accent); font-weight:700; }
+
+  .items { display:flex; flex-direction:column; gap:8px; }
+  .item { border:1px solid var(--line); border-radius:12px; padding:10px 12px; }
+  .item .top-line { display:flex; justify-content:space-between; gap:8px; font-size:14px; font-weight:700; }
+  .item .src { font-size:11px; font-weight:700; padding:1px 7px; border-radius:999px; white-space:nowrap; }
+  .src.auto { background:#e8f0fb; color:#2d5ea8; } .src.hint { background:#fbf0dc; color:var(--warn); }
+  .src.manual { background:var(--accent-soft); color:var(--accent); } .src.need { background:#fbe3e0; color:var(--bad); }
+  .item .val { font-size:12px; color:var(--muted); margin:2px 0 6px; }
+  .choice2 { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .choice2 button { font-weight:600; text-align:left; padding:7px 10px; font-size:13px; }
+  .choice2 button .k { font-weight:800; color:var(--accent); margin-right:4px; }
+  .choice2 button.sel { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 2px rgba(91,63,140,.08); }
+  .choiceN { display:grid; gap:6px; }
+  .choiceN button { font-weight:600; padding:7px 6px; font-size:13px; }
+  .choiceN button.sel { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 2px rgba(91,63,140,.08); }
+  .override { display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid rgba(91,63,140,.15); font-size:13px; font-weight:700; color:var(--accent); }
+  .override select { font:inherit; font-size:13px; font-weight:600; padding:6px 8px; border:1px solid var(--line); border-radius:9px; background:#fff; color:var(--text); flex:1; min-width:0; }
+  .hero.fixed { background:#fff4e0; } .hero.fixed .label { color:var(--warn); }
+  h3.with-btn { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  button.mini { font-size:12px; padding:4px 9px; color:var(--accent); }
+  .group-title { font-size:13px; font-weight:800; margin:14px 0 6px; display:flex; align-items:center; gap:8px; }
+  .group-title::before { content:""; width:9px; height:9px; background:var(--accent); display:inline-block; }
+  .empty { color:var(--muted); font-size:14px; padding:30px 0; text-align:center; }
+  .note { font-size:12px; color:var(--muted); margin-top:14px; }
+
+  @media (max-width: 900px) { .results { grid-template-columns:1fr; } }
+  @media (max-width: 620px) { .top { grid-template-columns:1fr; } #qPanel { grid-column:auto; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><img src="./colorm-logo.png" alt="COLOR·M" class="logo"><span class="eyebrow">FACE CODE 16</span></div>
+    <h1>얼굴형 · 얼굴무드 진단</h1>
+    <p class="lead">정면 사진을 올리면 얼굴 윤곽과 이목구비를 측정해 얼굴형(9종)과 얼굴무드(8가지)를 따로 판정합니다. 사진은 이 기기 밖으로 전송되지 않습니다.</p>
+    <p class="test-note">테스트 버전 · 판정 기준을 보정하는 중이라 결과는 참고용입니다</p>
+  </header>
+
+  <section class="panel customer">
+    <div class="rp-form">
+      <label>고객명<input id="rpName" placeholder="예: 홍길동"></label>
+      <label>상담일<input id="rpDate" type="date"></label>
+      <label>상담사<input id="rpConsultant" placeholder="선택"></label>
+    </div>
+  </section>
+
+  <section class="top">
+    <div class="panel photo-box">
+      <div class="photo-title">정면 사진 <span class="muted">필수 · 얼굴형 + 얼굴무드</span></div>
+      <input type="file" id="file" accept="image/*" hidden>
+      <div class="drop" id="drop">여기를 눌러 사진을 고르거나<br>사진을 끌어다 놓으세요</div>
+      <canvas id="canvas" hidden></canvas>
+      <div class="btns">
+        <button id="btnFile">사진 바꾸기</button>
+        <button id="btnZoom" disabled>크게 보기</button>
+        <button id="btnReset" disabled>선 위치 되돌리기</button>
+        <button id="btnLines" disabled>측정선 숨기기</button>
+        <button id="btnLabels">글자 숨기기</button>
+      </div>
+      <div class="status" id="status">얼굴 인식 모델을 불러오는 중…</div>
+    </div>
+
+    <div class="panel photo-box" id="profileBox">
+      <div class="photo-title">옆모습 사진 <span class="muted">선택 · 콧대 · 입체감 · 콧날</span></div>
+      <input type="file" id="pFile" accept="image/*" hidden>
+      <div class="drop" id="pDrop">정확히 90° 옆에서 찍은 사진을<br>여기에 고르거나 끌어다 놓으세요</div>
+      <canvas id="pCanvas" hidden></canvas>
+      <div class="btns">
+        <button id="pBtnFile">사진 바꾸기</button>
+        <button id="pBtnZoom" disabled>크게 보기</button>
+        <button id="pBtnReset" disabled>점 위치 되돌리기</button>
+        <button id="pBtnFlip" disabled>좌우 반전</button>
+        <button id="pBtnLabels">글자 숨기기</button>
+        <button id="pBtnClear" disabled>옆모습 빼기</button>
+      </div>
+      <div class="status" id="pStatus">옆모습 사진이 없으면 콧대·입체감은 직접 골라 주세요.</div>
+      <div id="pResult" style="margin-top:8px"></div>
+    </div>
+
+    <div class="panel" id="qPanel">
+      <div class="res-head"><div class="num">1</div><h2>사진 품질</h2></div>
+      <div id="qBody" class="muted">사진을 올리면 정면 여부, 기울기, 얼굴 크기를 먼저 확인합니다.<br><br>
+        <b>촬영 팁</b>
+        <ul class="tight">
+          <li>정면, 무표정, 턱을 살짝 당긴 자세</li>
+          <li>이마와 귀가 보이도록 머리를 넘기기</li>
+          <li>위에서 내리쬐는 조명보다 정면의 고른 조명</li>
+          <li>분석 후 사진 위의 <b>동그란 점을 끌어서</b> 헤어라인·미간·코 밑·턱 끝, 이마·광대·턱 폭 위치를 실제 얼굴에 맞출 수 있습니다</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="results">
+    <div class="panel" id="shapePanel">
+      <div class="res-head"><div class="num">2</div><h2>얼굴형</h2><span class="muted">외곽 윤곽만 사용</span></div>
+      <div id="shapeBody" class="empty">사진을 올리면 결과가 나옵니다.</div>
+    </div>
+    <div class="panel" id="typePanel">
+      <div class="res-head"><div class="num">3</div><h2>얼굴무드</h2><span class="muted">이목구비 · 선의 성질</span></div>
+      <div id="typeBody" class="empty">사진을 올리면 결과가 나옵니다.</div>
+    </div>
+  </section>
+
+  <section class="panel" id="reportPanel" style="margin-top:16px">
+    <div class="res-head"><div class="num">4</div><h2>레포트</h2><span class="muted">출력 · PDF · 파일 저장</span></div>
+    <div class="rp-form">
+      <label class="wide">상담 메모 (레포트에 그대로 들어가요 · 고객명·상담일은 화면 맨 위에서 적어요)<textarea id="rpMemo" rows="3" placeholder="예: 광대를 감싸는 사이드뱅, 6:4 가르마 추천. 다음 상담 때 컬러 진단 예정."></textarea></label>
+    </div>
+    <div class="btns">
+      <button class="primary" id="rpMake" disabled>레포트 만들기</button>
+      <button id="rpPrint" disabled>인쇄 / PDF 저장</button>
+      <button id="rpSave" disabled>파일로 저장</button>
+    </div>
+    <div class="status" id="rpStatus">정면 사진을 분석하면 레포트를 만들 수 있어요.</div>
+    <div id="rpPreview"></div>
+  </section>
+
+  <p class="note">측정 기준값은 아직 보정 전 가정값입니다(<code>rules.js</code>의 CONFIG). 실제 진단해 둔 고객 사진으로 맞춰 보며 조정해야 합니다. 자동 판정은 상담사가 언제든 직접 바꿀 수 있습니다.</p>
+</div>
+<style id="reportCss"></style>
+<script type="module" src="./app.js"></script>
+</body>
+</html>
