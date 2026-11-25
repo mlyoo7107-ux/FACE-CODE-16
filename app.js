@@ -583,7 +583,7 @@ function reportData() {
     memo: $('rpMemo').value.trim(),
     frontImg: snapshot(canvas, frontBox()),
     profileImg: !$('pCanvas').hidden && state.pm ? snapshot($('pCanvas'), profileBox()) : null,
-    quality: `${qLabel} (${state.q.reasons[0]})`,
+    quality: qLabel, // 고객용 레포트에는 등급만 (상세 사유·조작 안내는 상담사 화면에만)
     shape: {
       name: shapeName, en: shapeName ? SHAPES[shapeName].en : '', fixed: !!state.finalShape,
       candidate: state.finalShape ? (s.first && s.first !== state.finalShape ? `자동 판정 ${s.first}` : '') : s.candidate,
