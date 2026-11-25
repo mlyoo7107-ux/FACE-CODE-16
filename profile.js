@@ -422,4 +422,9 @@ export function initProfile({ getLandmarker, onChange }) {
   const end = () => { st.drag = null; canvas.style.cursor = ''; };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+
+  // 레포트용: 옆모습 점들(윤곽 8개 + 턱각 3개)의 위치
+  return {
+    points: () => (st.pts ? [...PROFILE_POINTS.map((d) => st.pts[d.key]), ...(st.jaw ? Object.values(st.jaw) : [])].filter(Boolean) : []),
+  };
 }

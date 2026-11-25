@@ -45,6 +45,13 @@ export const REPORT_CSS = `
 .rpt .r-matrix .h { background:none; border:none; color:var(--mut); font-weight:700; }
 .rpt .r-matrix .on { background:var(--ac); color:#fff; border-color:var(--ac); font-weight:800; }
 .rpt .r-memo { white-space:pre-wrap; font-size:9.5pt; min-height:12mm; }
+.rpt .r-big .sub b { color:var(--ink); }
+.rpt .r-note { font-size:7.8pt; color:var(--mut); margin-top:.8mm; line-height:1.35; }
+.rpt .r-qr { display:flex; align-items:center; gap:5mm; border:1px solid var(--line); background:var(--soft); border-radius:3mm; padding:3mm 4mm; margin-bottom:3mm; break-inside:avoid; }
+.rpt .r-qr-msg { flex:1; font-size:9pt; color:var(--mut); line-height:1.5; }
+.rpt .r-qr-msg b { color:var(--ac); font-size:10.5pt; }
+.rpt .r-qr-item { text-align:center; font-size:7.5pt; font-weight:700; color:var(--ac); }
+.rpt .r-qr-item img { display:block; width:22mm; height:22mm; background:#fff; border-radius:1.5mm; padding:1mm; margin:0 auto 1mm; }
 .rpt .r-foot { font-size:7.5pt; color:var(--mut); border-top:1px solid var(--line); padding-top:2mm; margin-top:1mm; }
 `;
 
@@ -52,6 +59,12 @@ const MATRIX = [
   ['동안', ['쿨캐주얼', '프레시', '큐트 · 액티브큐트']],
   ['성숙', ['쿨', '소프트엘리건트 · 엘리건트', '페미닌']],
 ];
+
+// 고객용 표기: 주(최종 결과) · 보조(가장 가까운 다른 하나). 점수·신뢰도는 상담사 화면에만 둠
+function rankLine(x, kind) {
+  const second = [x.rank1, x.rank2].find((n) => n && n !== x.name);
+  return `주 ${kind} <b>${esc(x.name || x.rank1)}</b>${second ? ` · 보조 ${kind} <b>${esc(second)}</b>` : ''}`;
+}
 
 // d: app.js 의 reportData() 결과
 export function reportHTML(d) {
@@ -75,7 +88,8 @@ export function reportHTML(d) {
       <div class="r-big">
         <div class="lab">${d.shape.fixed ? '최종 판정 (상담사)' : '진단 결과'}</div>
         <div class="name">${esc(d.shape.name || '확정 보류')}${d.shape.en ? `<small>${esc(d.shape.en)}</small>` : ''}</div>
-        <div class="sub">${d.shape.candidate ? `후보 ${esc(d.shape.candidate)} · ` : ''}신뢰도 ${esc(d.shape.confidence)}</div>
+        <div class="sub">${rankLine(d.shape, '얼굴형')}</div>
+        <div class="r-note">얼굴형은 체중 변화나 촬영 각도에 따라 달라질 수 있어, 가장 가까운 두 가지를 함께 안내해 드려요.</div>
       </div>
       <div class="r-sub">구조 근거</div>
       <ol>${d.shape.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ol>
@@ -92,7 +106,8 @@ export function reportHTML(d) {
         <div class="r-big">
           <div class="lab">${d.type.fixed ? '최종 판정 (상담사)' : '진단 결과'}</div>
           <div class="name">${esc(d.type.name)}<small>${esc(d.type.axis)}</small></div>
-          <div class="sub">${d.type.candidate ? `후보 ${esc(d.type.candidate)} · ` : ''}신뢰도 ${esc(d.type.confidence)} · 동안 ${d.type.cnt.a} / 성숙 ${d.type.cnt.b} · 곡선 ${d.type.cnt.c} / 직선 ${d.type.cnt.d}</div>
+          <div class="sub">${rankLine(d.type, '무드')}</div>
+          <div class="r-note">동안 ${d.type.cnt.a} · 성숙 ${d.type.cnt.b} / 곡선 ${d.type.cnt.c} · 직선 ${d.type.cnt.d} — 두 무드의 특징을 함께 활용하면 스타일 폭이 넓어져요.</div>
         </div>
         <div class="r-matrix"><div class="h"></div><div class="h">직선</div><div class="h">믹스</div><div class="h">곡선</div>
           ${MATRIX.map(([age, row]) => `<div class="h">${age}</div>${row.map(cell).join('')}`).join('')}</div>
@@ -109,6 +124,12 @@ export function reportHTML(d) {
       </div>
     </div>
   </div>
+
+  ${d.qr ? `<div class="r-qr">
+    <div class="r-qr-msg"><b>오늘 진단은 어떠셨나요?</b><br>네이버 리뷰 한 줄이 컬러엠에 큰 힘이 됩니다.<br>퍼스널컬러가 궁금하다면 무료 자가진단도 해 보세요.</div>
+    ${[['place', '네이버 리뷰'], ['selfcheck', '퍼스널컬러 자가진단'], ['instagram', '인스타그램']]
+      .filter(([k]) => d.qr[k]).map(([k, label]) => `<div class="r-qr-item"><img src="${d.qr[k]}" alt="${label} QR"><span>${label}</span></div>`).join('')}
+  </div>` : ''}
 
   <div class="r-foot">사진 품질 ${esc(d.quality)} · 측정값은 사진을 기준으로 한 참고값이며, 촬영 거리·표정·각도에 따라 달라질 수 있습니다. 최종 판단은 상담사의 관찰을 함께 반영합니다.</div>
 </div>`;

@@ -41,7 +41,14 @@ export async function faceContour(img, lm) {
   const mask = res.confidenceMasks[FACE_SKIN];
   const mw = mask.width, mh = mask.height;
   const conf = mask.getAsFloat32Array().slice();
+  const hairConf = res.confidenceMasks[1].getAsFloat32Array().slice(); // 1 = 머리카락
   res.close?.();
+  // 머리카락 확률 (가장 가까운 칸)
+  const hairAt = (x, y) => {
+    const mx = Math.floor((x / W) * mw), my = Math.floor((y / H) * mh);
+    if (mx < 0 || my < 0 || mx >= mw || my >= mh) return 0;
+    return hairConf[my * mw + mx];
+  };
 
   // 피부 확률 (이미지 좌표, 쌍선형 보간)
   const at = (x, y) => {
@@ -75,6 +82,15 @@ export async function faceContour(img, lm) {
   const refineR = Math.max(2, (1.5 * W) / mw);
   const foreheadY = P(54).y, midX = (P(9).x + P(10).x) / 2;
   const earTop = Math.min(P(127).y, P(356).y), earBottom = Math.max(P(132).y, P(361).y);
+  // 광대 높이 아래에서 피부 경계 바로 바깥이 머리카락이면 = 머리카락이 얼굴선을 가린 것 → 이 줄은 얼굴선이 아님
+  //  (이마 쪽은 원래 머리카락과 맞닿아 있으므로 검사하지 않음)
+  const occludeFrom = Math.min(P(234).y, P(454).y) - 0.02 * Wc;
+  const hidden = { L: 0, R: 0 }, checked = { L: 0, R: 0 }, hiddenRows = { L: new Set(), R: new Set() };
+  const hairOutside = (edge, y, out) => {
+    let mx = 0;
+    for (const d of [0.012, 0.025, 0.04]) mx = Math.max(mx, hairAt(edge + out * d * Wc, y));
+    return mx > 0.5;
+  };
   for (let y = y0; y <= y1; y += step) {
     for (const side of ['L', 'R']) {
       const out = side === 'L' ? -1 : 1;
@@ -106,6 +122,13 @@ export async function faceContour(img, lm) {
         if (Math.abs(x - lastSkin) > gapMax) { edge = lastSkin; break; }
       }
       if (edge == null) continue;
+      if (y >= occludeFrom) {
+        checked[side]++;
+        // 머리카락이 얼굴 위를 덮으면 보이는 피부는 좁아질 뿐 넓어지지 않음.
+        //  → 피부 끝이 평균 얼굴선보다 바깥(광대 폭의 0.8% 이상)이면 머리카락은 얼굴 뒤에 있는 것이고 이 윤곽은 진짜 얼굴선
+        const outsideMesh = out * (edge - xm) > 0.008 * Wc;
+        if (!outsideMesh && hairOutside(edge, y, out)) { hidden[side]++; hiddenRows[side].add(y); } // 머리카락에 가려진 줄 (윤곽은 그대로 두고 표시만)
+      }
       // 사진의 밝기 경계로 정밀하게 맞춤 (피부 판정은 256px 해상도라 몇 px 뭉개짐)
       let best = edge, bg = -1;
       for (let xx = edge - refineR; xx <= edge + refineR; xx += 0.5) {
@@ -123,7 +146,11 @@ export async function faceContour(img, lm) {
       const end = xm + out * 0.15 * Wc;
       if (at(x, y) < 0.5) continue;
       for (; out < 0 ? x >= end : x <= end; x += out * dx) {
-        if (at(x, y) < 0.5) { rowsRaw[side].set(y, x - (out * dx) / 2); break; }
+        if (at(x, y) < 0.5) {
+          const e = x - (out * dx) / 2;
+          rowsRaw[side].set(y, e);
+          break;
+        }
       }
     }
   }
@@ -163,11 +190,22 @@ export async function faceContour(img, lm) {
   };
   const jaw = { L: jawCorner('L'), R: jawCorner('R') };
 
+  // 광대~턱끝 구간 중 머리카락에 가려진 비율 (양쪽 평균)
+  const hiddenRatio = (hidden.L / Math.max(1, checked.L) + hidden.R / Math.max(1, checked.R)) / 2;
+
   return {
     coverage,
     rows,
     hairline,
     jaw,
+    hiddenRatio,
+    hiddenSide: { L: hidden.L / Math.max(1, checked.L), R: hidden.R / Math.max(1, checked.R) },
+    // 그 높이의 얼굴선이 머리카락에 가려졌는지 (가까운 줄 기준)
+    isHidden(side, y) {
+      const yy = Math.round((y - y0) / step) * step + y0;
+      for (let d = 0; d <= step * 2; d += step) if (hiddenRows[side].has(yy + d) || hiddenRows[side].has(yy - d)) return true;
+      return false;
+    },
     // side 'L'(사진 왼쪽) / 'R', y(이미지 좌표)에 해당하는 윤곽 x. 없으면 null
     // raw=true 면 밝기 보정 전 피부 경계
     at(side, y, raw = false) {

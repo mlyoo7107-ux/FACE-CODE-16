@@ -8,18 +8,20 @@
 
 export const CONFIG = {
   // 얼굴형 기준: [보통 값, 이만큼 벗어나면 '뚜렷함'(1단위)].
-  // (책의 '가로×1.4 = 세로' 기준은 줄자 측정용. 사진 측정에서는 같은 균형점이 약 1.32로 나옴)
+  // (책의 '가로×1.4 = 세로' 기준은 줄자 측정용. 책 예시 그림은 1.32, 실제 휴대폰 사진은 가까이 찍을수록 폭이 좁게 찍혀
+  //  얼굴이 길게 재지므로, 실제 고객 사진 피드백(2026-11-23, 3명 모두 길게 나옴)에 맞춰 보통 기준을 1.39로 둠)
   // FACE CODE 16 책의 얼굴형 예시 9장(피부 윤곽 + 자동 헤어라인으로 측정)의 평균과 차이로 맞춘 값.
   // 9장 중 8장이 해당 얼굴형으로 판정됨(육각형 예시는 계란형으로 나옴).
   // 세로 비율은 헤어라인 위치에 민감해서 일부러 폭을 넓혀 둠(헤어라인 10px 이동의 영향을 25% 줄임).
   shapeBase: {
-    R: [1.32, 0.06],     // 세로(헤어라인~턱끝) ÷ 가로(광대폭)
+    R: [1.39, 0.06],     // 세로(헤어라인~턱끝) ÷ 가로(광대폭). 실제 사진 기준
     f: [0.892, 0.03],    // 이마폭 ÷ 광대폭
-    j: [0.752, 0.03],    // 턱 모서리 폭 ÷ 광대폭 (턱 모서리 = 윤곽선이 실제로 꺾이는 곳)
-    chin: [0.529, 0.025],// 턱끝 쪽 폭 ÷ 턱 모서리 폭
-    Aj: [138.7, 4.5],    // 정면 턱각(도): 턱 모서리에서 광대와 턱끝을 잇는 각. 작을수록 각짐
+    // (2026-11-23 재보정: 귀 높이 윤곽 제외 규칙 + 얼굴 길이로 보정한 턱각 기준. 책 예시 9장 중 8장 정답)
+    j: [0.732, 0.035],   // 턱 모서리 폭 ÷ 광대폭 (턱 모서리 = 윤곽선이 실제로 꺾이는 곳)
+    chin: [0.542, 0.025],// 턱끝 쪽 폭 ÷ 턱 모서리 폭
+    Aj: [138.6, 4.5],    // 정면 턱각(도): 턱 모서리에서 광대와 턱끝을 잇는 각. 작을수록 각짐 (세로를 평균 비율로 맞춰 계산)
     In: [-0.0196, 0.006],// 협부 패임 (광대폭 대비, + 이면 패임)
-    rms: [0.0393, 0.0025],// 광대~턱끝 윤곽이 두 직선에서 벗어난 정도. 작을수록 직선 + 뚜렷한 모서리
+    rms: [0.02714, 0.0015],// 광대~턱끝 윤곽이 두 직선에서 벗어난 정도. 작을수록 직선 + 뚜렷한 모서리
     profJaw: [125, 5],   // 옆모습 턱각(도). 작을수록 옆턱 발달 (일반 범위로 정한 가정값, 사진 보정 전)
   },
   A0: 138.7,             // 얼굴무드 '골격감' 참고용 정면 턱각 (이보다 6° 이상 작으면 골격이 느껴짐)
@@ -85,8 +87,22 @@ export function measure(lm, w, h, hairline, overrides = {}, contour = null) {
     hairlineEstimated = true;
   }
 
-  const Wf = wd(54, 284), Wc = wd(234, 454), Wj = wd(172, 397), Wchin = wd(149, 378);
+  const Wf = wd(54, 284), Wc = wd(234, 454);
+  let Wj = wd(172, 397), Wchin = wd(149, 378);
   const H = chin.y - hl.y;
+
+  // 머리카락이 한쪽 볼·턱 옆만 가리면(가림 30% 초과) 턱 쪽 값은 안 가려진 쪽 하나로만 잼
+  const hs = contour?.hiddenSide;
+  const jawSide = hs && (hs.L > 0.3) !== (hs.R > 0.3) ? (hs.L > 0.3 ? 'R' : 'L') : null;
+  if (jawSide) {
+    // 얼굴 가운데 선(미간·코밑·턱끝 평균)에서 안 가려진 쪽까지의 거리 × 2
+    const mid = (P(168).x + P(2).x + P(152).x) / 3;
+    const half = (i) => Math.abs(P(i).x - mid) * 2;
+    const [cI, jI, chI] = jawSide === 'L' ? [234, 172, 149] : [454, 397, 378];
+    const scale = Wc / half(cI); // 광대 폭은 양쪽 그대로 쓰고, 한쪽 비율을 맞춰 줌
+    Wj = half(jI) * scale;
+    Wchin = half(chI) * scale;
+  }
 
   // 협부 패임: 광대점→턱각점 직선보다 안쪽으로 들어간 정도
   const inward = (a, b, pts, leftSide) => {
@@ -100,17 +116,21 @@ export function measure(lm, w, h, hairline, overrides = {}, contour = null) {
     }
     return m;
   };
-  const In = (inward(234, 172, [93, 132, 58], true) + inward(454, 397, [323, 361, 288], false)) / 2 / Wc;
+  const InL = inward(234, 172, [93, 132, 58], true), InR = inward(454, 397, [323, 361, 288], false);
+  const In = (jawSide === 'L' ? InL : jawSide === 'R' ? InR : (InL + InR) / 2) / Wc;
 
   // 정면 턱각: 턱 모서리 점에서 광대 점과 턱끝을 바라본 각도 (작을수록 모서리가 뚜렷하게 꺾임)
   //  턱 모서리 점(172/397)은 윤곽선에서 자동으로 찾은 위치이고, 상담사가 끌어서 고칠 수 있음
+  // 얼굴이 길면 같은 턱이라도 각이 더 뾰족하게 계산되므로, 세로를 평균 비율(1.32)로 맞춘 뒤 각도를 잼
+  const yScale = Math.min(1.15, Math.max(0.85, 1.32 / (H / Wc))); // 턱각 기준값(138.6°)을 잡을 때 쓴 비율 그대로
   const angP = (o, a, b) => {
     const O = P(o), A = P(a), B = P(b);
-    const v1 = { x: A.x - O.x, y: A.y - O.y }, v2 = { x: B.x - O.x, y: B.y - O.y };
+    const v1 = { x: A.x - O.x, y: (A.y - O.y) * yScale }, v2 = { x: B.x - O.x, y: (B.y - O.y) * yScale };
     const cs = (v1.x * v2.x + v1.y * v2.y) / (Math.hypot(v1.x, v1.y) * Math.hypot(v2.x, v2.y));
     return (Math.acos(Math.max(-1, Math.min(1, cs))) * 180) / Math.PI;
   };
-  const Aj = (angP(172, 234, 152) + angP(397, 454, 152)) / 2;
+  const AjL = angP(172, 234, 152), AjR = angP(397, 454, 152);
+  const Aj = jawSide === 'L' ? AjL : jawSide === 'R' ? AjR : (AjL + AjR) / 2;
   // 턱 아래 V: 턱 모서리와 턱끝 중간 높이의 얼굴 폭 ÷ 턱 모서리 폭 (작을수록 V로 급하게 좁아짐)
   let vTaper;
   if (contour) {
@@ -121,7 +141,7 @@ export function measure(lm, w, h, hairline, overrides = {}, contour = null) {
   }
   if (vTaper == null) vTaper = wd(150, 379) / wd(172, 397);
   // 광대~턱끝 윤곽이 두 직선(모서리 있음)에 얼마나 가까운지. 작을수록 직선적·각진 윤곽
-  const js = [contour?.jaw?.L?.rms, contour?.jaw?.R?.rms].filter((v) => v != null);
+  const js = (jawSide ? [contour?.jaw?.[jawSide]?.rms] : [contour?.jaw?.L?.rms, contour?.jaw?.R?.rms]).filter((v) => v != null);
   const jawRms = js.length ? js.reduce((a, b) => a + b, 0) / js.length : null;
 
   // 눈
@@ -159,7 +179,7 @@ export function measure(lm, w, h, hairline, overrides = {}, contour = null) {
   return {
     roll, rollDeg, yaw, faceWidthPx: Wc, hairlineEstimated,
     hairlineImg: hairline || unrot(hl, c, roll),
-    R: H / Wc, f: Wf / Wc, j: Wj / Wc, chinRatio: Wchin / Wj, In, Aj, vTaper, jawRms,
+    R: H / Wc, f: Wf / Wc, j: Wj / Wc, chinRatio: Wchin / Wj, In, Aj, vTaper, jawRms, jawSide,
     eyeW, eyeH, eyeOpen: eyeH / eyeW, eyeTilt, browArch,
     eyeGap: dist(P(133), P(362)) / eyeW,
     eyeSize: eyeW / Wc,
@@ -237,6 +257,8 @@ export function quality(m, extra = {}) {
   const smiling = (extra.smile ?? 0) > 0.35;
   if (smiling) reasons.push('웃는 표정 — 볼과 턱선 윤곽이 실제와 다르게 보일 수 있음 (무표정 권장)');
   if (extra.edited) reasons.push(`상담사가 측정점 ${extra.edited}개를 직접 보정함`);
+  const hairHidden = (extra.hidden ?? 0) > 0.3;
+  if (hairHidden) reasons.push(`볼·턱 옆의 ${Math.round(extra.hidden * 100)}%가 머리카락에 가려, 그 부분은 평균 얼굴선으로 판단함 — 머리를 귀 뒤로 넘기거나 점을 직접 맞추면 더 정확해요`);
   if (m.yaw > 0.12) reasons.push(`고개가 옆으로 돌아감 (좌우 차이 ${Math.round(m.yaw * 100)}%)`);
   else if (m.yaw > 0.06) reasons.push(`고개가 약간 돌아감 (좌우 차이 ${Math.round(m.yaw * 100)}%)`);
   if (m.rollDeg > 8) reasons.push(`얼굴이 기울어짐 (${m.rollDeg.toFixed(1)}°, 보정함)`);
@@ -246,7 +268,7 @@ export function quality(m, extra = {}) {
 
   let level = 'high';
   if (m.yaw > 0.12 || m.faceWidthPx < 100) level = 'low';
-  else if (m.yaw > 0.06 || m.rollDeg > 8 || m.faceWidthPx < 180 || m.hairlineEstimated || smiling) level = 'mid';
+  else if (m.yaw > 0.06 || m.rollDeg > 8 || m.faceWidthPx < 180 || m.hairlineEstimated || smiling || hairHidden) level = 'mid';
   if (!reasons.length) reasons.push('정면, 윤곽이 잘 보이고 왜곡이 적음');
   return { level, reasons };
 }
@@ -273,8 +295,11 @@ function baseShapeValues(m, extra = {}) {
   const zp = pa != null ? (pa - B.profJaw[0]) / B.profJaw[1] : null;
   // 보통 값에서 몇 단위 벗어났는지 (z)
   const z = (key, v) => (v - B[key][0]) / B[key][1];
-  const zR = z('R', m.R), zf = z('f', m.f), zj = z('j', m.j), zc = z('chin', m.chinRatio), zA = z('Aj', m.Aj), zI = z('In', m.In);
-  const zs = m.jawRms != null ? z('rms', m.jawRms) : 0;
+  // 볼·턱 옆이 머리카락에 많이 가려졌으면(m.jawHidden) 턱 쪽 값은 머리카락 경계를 잰 것이라 '보통'(0)으로 두고 판단에서 뺌
+  const H0 = m.jawHidden;
+  const zR = z('R', m.R), zf = z('f', m.f);
+  const zj = H0 ? 0 : z('j', m.j), zc = H0 ? 0 : z('chin', m.chinRatio), zA = H0 ? 0 : z('Aj', m.Aj), zI = H0 ? 0 : z('In', m.In);
+  const zs = !H0 && m.jawRms != null ? z('rms', m.jawRms) : 0;
   const pos = (v) => ramp(v, 0.4, 1.4), neg = (v) => ramp(-v, 0.4, 1.4);
   return {
     vertical: ramp(zR, -0.3, 0.5),
@@ -283,7 +308,8 @@ function baseShapeValues(m, extra = {}) {
     fWide: pos(zf),
     fMax: ramp(zf, 1.0, 1.8),
     fNarrow: neg(zf),
-    jWide: pos(zj),
+    // 긴 얼굴은 옆선이 곧게 내려와 턱 모서리 폭이 넓게 나오기 쉬움 → 긴 만큼 '옆턱이 넓음'으로 덜 봄
+    jWide: pos(zj) * (1 - 0.6 * pos(zR)),
     jNarrow: neg(zj),
     cheekProm: Math.min(ramp(-zf, 0.3, 1.2), ramp(-zj, 0.3, 1.2)),
     angular: ramp(-zA, 0.3, 1.5),
@@ -398,8 +424,8 @@ const SHAPE_RULES = {
   각진형: [['angular', 2.5], ['jWide', 1.5], ['flatSide', 0.5], ['straight', 0.5]],
   땅콩형: [['hollow', 3], ['notJNarrow', 0.5]],
   // 육각형: 직선적이고 모서리가 여럿인 윤곽 + 턱 아래 V + 옆턱 존재 + 위로 좁아지는 이마
-  육각형: [['straight', 2], ['chinV', 1], ['notJNarrow', 0.8], ['fNarrow', 0.5], ['flatSide', 0.5], ['soft', 0.3]],
-  마름모형: [['cheekProm', 2.5], ['jNarrow', 1], ['fNarrow', 1], ['soft', 0.5]],
+  육각형: [['straight', 2], ['cheekProm', 1], ['angular', 0.8], ['chinV', 1], ['notJNarrow', 0.8], ['fNarrow', 0.5], ['flatSide', 0.5], ['soft', 0.3]],
+  마름모형: [['cheekProm', 2.5], ['jNarrow', 1], ['fNarrow', 1], ['soft', 1], ['notStraight', 1.5]],
   역삼각형: [['fMax', 2], ['fWide', 1], ['jNarrow', 1], ['notCheekProm', 0.5]],
   하트형: [['jNarrow', 1.5], ['notFMax', 0.8], ['soft', 0.8], ['notCheekProm', 0.5], ['flatSide', 0.4], ['notStraight', 0.8]],
 };
@@ -439,6 +465,8 @@ export function classifyShape(m, q, shapeAnswers = {}) {
 
   return {
     first: decided ? first.name : null,
+    rank1: first.name, rank2: second.name,                 // 점수 1순위·2순위 (사진 품질과 상관없이)
+    score1: Math.round(first.score * 100), score2: Math.round(second.score * 100),
     candidates: [first.name, second.name],
     candidate: boundary || !decided ? second.name : null,
     confidence: conf,
@@ -453,7 +481,7 @@ export function classifyShape(m, q, shapeAnswers = {}) {
 // group age: a=동안, b=성숙 / group line: c=곡선, d=직선
 export const TYPE_ITEMS = [
   { id: 'shapeRatio', group: 'age', q: '얼굴 세로·가로 비율', a: '세로가 짧은 편', b: '세로가 긴 편',
-    // 책의 '가로×1.4' 기준은 줄자 측정 기준. 사진(피부 윤곽·헤어라인) 측정에서는 평균이 1.32 라서 그 값을 기준으로 씀
+    // 책의 '가로×1.4' 기준은 줄자 측정 기준. 사진 측정에서는 얼굴형 판정과 같은 '보통' 기준(shapeBase.R)을 씀
     auto: (m) => ({ v: m.R < CONFIG.shapeBase.R[0] ? 'a' : 'b', val: `세로÷가로 ${r2(m.R)} (사진 측정 평균 ${CONFIG.shapeBase.R[0]})` }) },
   { id: 'chinLen', group: 'age', q: '턱 길이 (아랫입술 아래 끝 ~ 턱 끝)', a: '턱이 짧다', b: '턱이 길다',
     auto: (m) => ({ v: m.chinLen < CONFIG.type.chinLen ? 'a' : 'b', val: `하안부(코 밑~턱 끝) 중 턱 길이 ${Math.round(m.chinLen * 100)}%` }) },
@@ -543,6 +571,23 @@ export function classifyType(answers) {
   if (ages.length === 2) candidate = typeOf(ages[1], band, bigEye);
   else if (nearBand) candidate = typeOf(ages[0], nearBand, bigEye);
 
+  // 2순위: 1순위에서 가장 적은 변화로 바뀌는 이웃 타입
+  //  (동안↔성숙 차이, 직선 개수가 경계까지 남은 수, 눈 크기로 갈리는 짝 타입 중 가장 가까운 것)
+  let second = candidate;
+  if (!second) {
+    const opts = [];
+    opts.push({ t: typeOf(ages[0] === '동안' ? '성숙' : '동안', band, bigEye), d: ageMargin });
+    if (band === '믹스') {
+      const toCurve = dScaled - 1, toStraight = 7 - dScaled;
+      opts.push({ t: typeOf(ages[0], toCurve <= toStraight ? '곡선' : '직선', bigEye), d: Math.min(toCurve, toStraight) });
+    } else {
+      opts.push({ t: typeOf(ages[0], '믹스', bigEye), d: band === '곡선' ? 2 - dScaled : dScaled - 6 });
+    }
+    const sib = typeOf(ages[0], band, !bigEye);
+    if (sib !== first) opts.push({ t: sib, d: 1.5 });
+    second = opts.filter((o) => o.t !== first).sort((a, b) => a.d - b.d)[0]?.t || null;
+  }
+
   let conf = ageMargin >= 2 && !nearBand ? '높음' : ageMargin >= 1 ? '보통' : '낮음';
   if (missing > 0 && conf === '높음') conf = '보통';
 
@@ -557,7 +602,7 @@ export function classifyType(answers) {
   }
 
   return {
-    first, candidate, confidence: conf, cnt,
+    first, second, candidate, confidence: conf, cnt,
     ageMargin, lineMargin, missing,
     boundary: ages.length === 2 || !!nearBand,
     reasons,

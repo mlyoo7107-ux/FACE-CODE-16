@@ -1,5 +1,6 @@
 import { FaceLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs';
-import { measure, quality, classifyShape, classifyType, autoShapeAnswers, SHAPE_ITEMS, TYPE_ITEMS, TYPES, SHAPES } from './rules.js';
+import { measure, quality, classifyShape, classifyType, autoShapeAnswers, SHAPE_ITEMS, TYPE_ITEMS, TYPES, SHAPES, CONFIG } from './rules.js';
+const CONFIG_R = CONFIG.shapeBase.R[0]; // 화면·레포트에 보여줄 세로÷가로 '보통' 기준
 import { initProfile } from './profile.js';
 import { setupZoom } from './zoom.js';
 import { faceContour, OVAL_L, OVAL_R } from './facecontour.js';
@@ -73,7 +74,7 @@ document.addEventListener('drop', (e) => { const f = e.dataTransfer?.files?.[0];
 // 결과 칸을 처음 상태로 (얼굴을 못 찾았을 때 이전 사람 결과가 남지 않게)
 function clearResults(msg) {
   state.m = null; state.q = null;
-  $('rpMake').disabled = $('rpPrint').disabled = $('rpSave').disabled = true;
+  $('rpMake').disabled = $('rpPrint').disabled = $('rpPdf').disabled = $('rpImg').disabled = true;
   $('rpPreview').innerHTML = '';
   $('rpStatus').textContent = '정면 사진을 분석하면 레포트를 만들 수 있어요.';
   for (const id of ['shapeBody', 'typeBody']) { $(id).classList.add('empty'); $(id).textContent = msg; }
@@ -130,12 +131,13 @@ async function findContour(img, lm) {
     for (const [l, r] of pairs) {
       for (const [i, side] of [[l, 'L'], [r, 'R']]) {
         const y = lm[i].y * H, x = c.at(side, y);
-        if (x != null) snap[i] = { x, y };
+        // 그 높이의 피부 경계가 머리카락 경계라면(얼굴선이 가려짐) 붙이지 않고 얼굴 인식이 추정한 얼굴선 위치를 씀
+        if (x != null && !c.isHidden(side, y)) snap[i] = { x, y };
       }
     }
-    // 턱 폭 점은 입꼬리 높이 고정 대신, 윤곽선이 실제로 꺾이는 턱 모서리에 둠
-    if (c.jaw.L) snap[172] = { x: c.jaw.L.x, y: c.jaw.L.y };
-    if (c.jaw.R) snap[397] = { x: c.jaw.R.x, y: c.jaw.R.y };
+    // 턱 폭 점은 입꼬리 높이 고정 대신, 윤곽선이 실제로 꺾이는 턱 모서리에 둠 (그쪽 얼굴선이 많이 가려졌으면 제외)
+    if (c.jaw.L && c.hiddenSide.L <= 0.3) snap[172] = { x: c.jaw.L.x, y: c.jaw.L.y };
+    if (c.jaw.R && c.hiddenSide.R <= 0.3) snap[397] = { x: c.jaw.R.x, y: c.jaw.R.y };
     state.contour = c.coverage > 0.3 ? c : null;
     state.autoHairline = c.hairline;
     state.snap = state.contour ? snap : {};
@@ -212,9 +214,12 @@ function analyze() {
   const m = measure(lm, img.naturalWidth, img.naturalHeight, state.hairline || state.autoHairline, { ...state.snap, ...state.overrides }, state.contour);
   m.hairlineAuto = !state.hairline && !!state.autoHairline;
   m.profJawAngle = state.pm?.jawAngle ?? null; // 옆모습 턱각 (점을 맞춘 경우) → 얼굴형에도 반영
+  // 볼·턱 옆이 양쪽 모두 머리카락에 많이 가려짐 → 턱 쪽 측정값은 판단에서 제외 (한쪽만 가려지면 measure가 안 가려진 쪽으로 잼)
+  const hs = state.contour?.hiddenSide;
+  m.jawHidden = !!hs && hs.L > 0.3 && hs.R > 0.3;
   state.m = m;
   const edited = Object.keys(state.overrides).length + (state.hairline ? 1 : 0);
-  const q = quality(m, { smile: state.smile, edited });
+  const q = quality(m, { smile: state.smile, edited, hidden: state.contour?.hiddenRatio ?? 0 });
   state.q = q;
   const autoS = autoShapeAnswers(m);
   for (const it of SHAPE_ITEMS) {
@@ -235,7 +240,11 @@ function analyze() {
   renderQ(q);
   renderShape();
   renderType();
-  if ($('rpMake').disabled) { $('rpMake').disabled = false; $('rpStatus').textContent = '고객 정보와 메모를 적고 "레포트 만들기"를 누르세요.'; }
+  // 분석이 끝나면 레포트 만들기 없이도 바로 PDF·이미지 저장·인쇄 가능 (누르면 레포트를 새로 만들어 저장)
+  if ($('rpMake').disabled) {
+    $('rpMake').disabled = $('rpPdf').disabled = $('rpImg').disabled = $('rpPrint').disabled = false;
+    $('rpStatus').textContent = '바로 "PDF로 저장"·"이미지로 저장"을 누르거나, "레포트 만들기"로 먼저 미리 볼 수 있어요.';
+  }
 }
 
 // ───────── 그리기 ─────────
@@ -375,7 +384,8 @@ function renderShape() {
       <div class="name">${name ? `${name}<small>${SHAPES[name].en}</small>` : '확정 보류'}</div>
       <dl class="kv">
         ${state.finalShape ? `<dt>자동 판정</dt><dd>${auto || '확정 보류'}</dd>` : ''}
-        <dt>후보</dt><dd>${r.candidate || (auto ? '없음' : r.candidates.join(' / '))}</dd>
+        ${auto ? '' : `<dt>1순위</dt><dd>${r.rank1} <span class="muted">(점수 ${r.score1})</span></dd>`}
+        <dt>2순위</dt><dd>${r.rank2} <span class="muted">(점수 ${r.score2} · 1순위 ${r.score1})</span></dd>
         <dt>신뢰도</dt><dd><span class="badge ${CONF[r.confidence]}">${r.confidence}</span></dd>
         <dt>경계 여부</dt><dd>${r.boundary ? `경계 (${r.candidates.join(' ↔ ')})` : '아님'}</dd>
       </dl>
@@ -390,12 +400,12 @@ function renderShape() {
 
     <h3>외곽 구조 측정값</h3>
     <table class="meas">
-      <tr><td>세로 ÷ 가로 (사진 측정 평균 1.32)${m.hairlineEstimated ? ' · 헤어라인 추정' : ''}</td><td>${m.R.toFixed(2)}</td></tr>
+      <tr><td>세로 ÷ 가로 (사진 보통 ${CONFIG_R})${m.hairlineEstimated ? ' · 헤어라인 추정' : ''}</td><td>${m.R.toFixed(2)}</td></tr>
       <tr><td>이마 폭 ÷ 광대 폭</td><td>${m.f.toFixed(2)}</td></tr>
       <tr><td>턱 모서리 폭 ÷ 광대 폭</td><td>${m.j.toFixed(2)}</td></tr>
       <tr><td>턱 모서리 각도 · 정면 (작을수록 각짐, 평균 139°)</td><td>${Math.round(m.Aj)}°</td></tr>
       <tr><td>턱끝 쪽 폭 ÷ 턱 모서리 폭 (작을수록 V)</td><td>${m.chinRatio.toFixed(2)}</td></tr>
-      <tr><td>광대~턱 윤곽 곡선도 (작을수록 직선·모서리, 평균 3.9)</td><td>${m.jawRms != null ? (m.jawRms * 100).toFixed(1) : '-'}</td></tr>
+      <tr><td>광대~턱 윤곽 곡선도 (작을수록 직선·모서리, 평균 2.7)</td><td>${m.jawRms != null ? (m.jawRms * 100).toFixed(1) : '-'}</td></tr>
       <tr><td>협부 패임 (광대 폭 대비)</td><td>${(m.In * 100).toFixed(1)}%</td></tr>
       ${state.pm?.jawAngle != null ? `<tr><td>턱각 · 옆모습 (120° 미만 각진 편, 참고)</td><td>${Math.round(state.pm.jawAngle)}°</td></tr>` : ''}
     </table>
@@ -439,7 +449,7 @@ function renderType() {
   const cell = (txt) => {
     const names = txt.split(' · ');
     if (names.includes(final)) return `<div class="on">${txt}</div>`;
-    if (r.candidate && names.includes(r.candidate)) return `<div class="cand">${txt}</div>`;
+    if (r.second && names.includes(r.second)) return `<div class="cand">${txt}</div>`;
     return `<div>${txt}</div>`;
   };
   const itemHtml = (it) => {
@@ -463,7 +473,7 @@ function renderType() {
       <div class="name">${final}<small>${info.axis}</small></div>
       <dl class="kv">
         ${state.finalType ? `<dt>자동 판정</dt><dd>${r.first}</dd>` : ''}
-        <dt>후보</dt><dd>${r.candidate || '없음'}</dd>
+        <dt>2순위</dt><dd>${r.second || '없음'}</dd>
         <dt>신뢰도</dt><dd><span class="badge ${CONF[r.confidence]}">${r.confidence}</span></dd>
         <dt>경계 여부</dt><dd>${r.boundary ? '경계' : '아님'}</dd>
         <dt>a · b · c · d</dt><dd>동안 ${r.cnt.a} · 성숙 ${r.cnt.b} · 곡선 ${r.cnt.c} · 직선 ${r.cnt.d}</dd>
@@ -507,17 +517,55 @@ let logoData = null;
 fetch('./colorm-logo.png').then((r) => r.blob()).then((b) => new Promise((ok) => {
   const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b);
 })).then((u) => { logoData = u; }).catch(() => {});
+// 레포트 하단 QR (네이버 리뷰 · 퍼스널컬러 자가진단 · 인스타그램). 저장 파일에도 들어가도록 데이터로 읽어 둠
+const qrData = {};
+for (const k of ['place', 'selfcheck', 'instagram']) {
+  fetch(`./qr-${k}.png`).then((r) => (r.ok ? r.blob() : Promise.reject())).then((b) => new Promise((ok) => {
+    const fr = new FileReader(); fr.onload = () => ok(fr.result); fr.readAsDataURL(b);
+  })).then((u) => { qrData[k] = u; }).catch(() => {});
+}
 {
   const d = new Date();
   $('rpDate').value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-// 캔버스(측정선 포함)를 레포트용 이미지로 (너무 크면 줄임)
-function snapshot(cv, maxW = 1000) {
-  const k = Math.min(1, maxW / cv.width);
+// 캔버스(측정선 포함)를 레포트용 이미지로. box(이미지 좌표)가 있으면 그 부분만 잘라냄
+function snapshot(cv, box, maxW = 1000) {
+  const b = box || { x: 0, y: 0, w: cv.width, h: cv.height };
+  const k = Math.min(1, maxW / b.w);
   const t = document.createElement('canvas');
-  t.width = Math.round(cv.width * k); t.height = Math.round(cv.height * k);
-  t.getContext('2d').drawImage(cv, 0, 0, t.width, t.height);
-  return t.toDataURL('image/jpeg', 0.88);
+  t.width = Math.round(b.w * k); t.height = Math.round(b.h * k);
+  t.getContext('2d').drawImage(cv, b.x, b.y, b.w, b.h, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', 0.9);
+}
+// 사진 안으로 잘라낼 영역 맞추기 (세로:가로 = 5:4 정도로)
+function fitBox(cx, top, bottom, minW, cv) {
+  let h = bottom - top, w = Math.max(minW, h * 0.8);
+  let x = cx - w / 2, y = top;
+  w = Math.min(w, cv.width); h = Math.min(h, cv.height);
+  x = Math.max(0, Math.min(cv.width - w, x)); y = Math.max(0, Math.min(cv.height - h, y));
+  return { x, y, w, h };
+}
+// 화면에서 확대해 둔 상태면 그 보이는 부분, 아니면 얼굴 중심으로 자름
+function zoomedView(cv) {
+  try { return cv.dataset.view ? JSON.parse(cv.dataset.view) : null; } catch { return null; }
+}
+function frontBox() {
+  const v = zoomedView(canvas);
+  if (v) return v;
+  const hl = state.m.hairlineImg, chin = handlePos(152), L = handlePos(234), R = handlePos(454);
+  const fh = chin.y - hl.y, wc = Math.abs(R.x - L.x);
+  return fitBox((L.x + R.x) / 2, hl.y - 0.35 * fh, chin.y + 0.2 * fh, wc * 1.7, canvas);
+}
+function profileBox() {
+  const pc = $('pCanvas');
+  const v = zoomedView(pc);
+  if (v) return v;
+  const pts = profileApi.points();
+  if (!pts.length) return null;
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const ph = y1 - y0;
+  return fitBox((x0 + x1) / 2, y0 - 0.25 * ph, y1 + 0.2 * ph, (x1 - x0) * 1.4, pc);
 }
 function reportData() {
   const m = state.m, s = state.shapeResult, t = state.typeResult;
@@ -528,21 +576,23 @@ function reportData() {
   const qLabel = { high: '좋음', mid: '보통', low: '낮음' }[state.q.level];
   return {
     logo: logoData,
+    qr: Object.keys(qrData).length ? qrData : null,
     customer: $('rpName').value.trim(),
     date: $('rpDate').value,
     consultant: $('rpConsultant').value.trim(),
     memo: $('rpMemo').value.trim(),
-    frontImg: snapshot(canvas),
-    profileImg: !$('pCanvas').hidden && state.pm ? snapshot($('pCanvas')) : null,
+    frontImg: snapshot(canvas, frontBox()),
+    profileImg: !$('pCanvas').hidden && state.pm ? snapshot($('pCanvas'), profileBox()) : null,
     quality: `${qLabel} (${state.q.reasons[0]})`,
     shape: {
       name: shapeName, en: shapeName ? SHAPES[shapeName].en : '', fixed: !!state.finalShape,
       candidate: state.finalShape ? (s.first && s.first !== state.finalShape ? `자동 판정 ${s.first}` : '') : s.candidate,
+      rank1: s.rank1, rank2: s.rank2, score1: s.score1, score2: s.score2,
       confidence: state.finalShape ? '상담사 확인' : s.confidence,
       reasons: s.reasons.map((x) => `${x.label} (${x.val})`),
       thirds: [['상안부', th.upper], ['중안부', th.middle], ['하안부', th.lower]],
       measures: [
-        ['세로 ÷ 가로 (사진 평균 1.32)', m.R.toFixed(2)],
+        [`세로 ÷ 가로 (사진 보통 ${CONFIG_R})`, m.R.toFixed(2)],
         ['이마 폭 ÷ 광대 폭', m.f.toFixed(2)],
         ['턱 모서리 폭 ÷ 광대 폭', m.j.toFixed(2)],
         ['턱 모서리 각도 (정면)', `${Math.round(m.Aj)}°`],
@@ -556,6 +606,7 @@ function reportData() {
       name: typeName, axis: info.axis, mood: info.mood, point: info.point, taste: info.taste,
       fixed: !!state.finalType, cnt: t.cnt,
       candidate: state.finalType ? (t.first !== state.finalType ? `자동 판정 ${t.first}` : '') : t.candidate,
+      rank1: t.first, rank2: t.second,
       confidence: state.finalType ? '상담사 확인' : t.confidence,
     },
     profile: state.pm ? describeProfile(state.pm) : null,
@@ -565,27 +616,81 @@ function makeReport() {
   if (!state.m || !state.shapeResult) return null;
   const d = reportData();
   $('rpPreview').innerHTML = reportHTML(d);
-  $('rpPrint').disabled = $('rpSave').disabled = false;
+  $('rpPrint').disabled = $('rpPdf').disabled = $('rpImg').disabled = false;
   $('rpStatus').textContent = '아래 미리보기를 확인하고 인쇄하거나 저장하세요. 결과나 메모를 바꿨다면 "레포트 만들기"를 다시 누르세요.';
   return d;
 }
 $('rpMake').addEventListener('click', () => { makeReport(); $('rpPreview').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
 $('rpPrint').addEventListener('click', () => { if (makeReport()) window.print(); });
-$('rpSave').addEventListener('click', () => {
-  const d = makeReport();
-  if (!d) return;
-  const blob = new Blob([reportDocument(d)], { type: 'text/html;charset=utf-8' });
+
+// ── 이미지(PNG) · PDF 바로 저장: 레포트 화면을 그림으로 만든 뒤 파일로 내려받음 ──
+const LIBS = {
+  html2canvas: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js',
+  jspdf: 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+};
+const loaded = {};
+function loadLib(name) {
+  return (loaded[name] ||= new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = LIBS[name]; s.onload = ok; s.onerror = () => { delete loaded[name]; fail(new Error(name)); };
+    document.head.appendChild(s);
+  }));
+}
+const fileBase = (d) => `진단레포트_${(d.customer || '고객').replace(/[\\/:*?"<>|\s]/g, '')}_${d.date}`;
+function download(blobOrUrl, name) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `진단레포트_${(d.customer || '고객').replace(/[\\/:*?"<>|]/g, '')}_${d.date}.html`;
+  a.href = typeof blobOrUrl === 'string' ? blobOrUrl : URL.createObjectURL(blobOrUrl);
+  a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-  $('rpStatus').textContent = '레포트 파일을 저장했어요. 파일을 더블클릭하면 브라우저에서 열리고, 거기서도 인쇄할 수 있어요.';
-});
+  if (typeof blobOrUrl !== 'string') setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+}
+async function reportCanvas() {
+  const d = makeReport();
+  if (!d) return null;
+  await loadLib('html2canvas');
+  const el = $('rpPreview').querySelector('.rpt');
+  const keep = el.getAttribute('style') || '';
+  el.style.boxShadow = 'none'; el.style.margin = '0'; // 종이 그림자·바깥 여백은 빼고 종이만
+  try {
+    const cv = await window.html2canvas(el, { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false });
+    return { cv, d };
+  } finally { el.setAttribute('style', keep); }
+}
+async function saveAs(kind) {
+  const btns = [$('rpImg'), $('rpPdf')];
+  btns.forEach((b) => { b.disabled = true; });
+  $('rpStatus').textContent = kind === 'pdf' ? 'PDF를 만드는 중…' : '이미지를 만드는 중…';
+  try {
+    const r = await reportCanvas();
+    if (!r) return;
+    if (kind === 'png') {
+      const blob = await new Promise((ok) => r.cv.toBlob(ok, 'image/png'));
+      download(blob, `${fileBase(r.d)}.png`);
+      $('rpStatus').textContent = '이미지(PNG)로 저장했어요. 다운로드 폴더를 확인하세요.';
+    } else {
+      await loadLib('jspdf');
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+      // A4(210×297mm)에 맞춰 넣기 (넘치면 비율대로 줄임)
+      let w = 210, h = (r.cv.height / r.cv.width) * 210;
+      if (h > 297) { w = (297 / h) * 210; h = 297; }
+      pdf.addImage(r.cv.toDataURL('image/jpeg', 0.92), 'JPEG', (210 - w) / 2, 0, w, h);
+      pdf.save(`${fileBase(r.d)}.pdf`);
+      $('rpStatus').textContent = 'PDF로 저장했어요. 다운로드 폴더를 확인하세요.';
+    }
+  } catch (e) {
+    console.error(e);
+    $('rpStatus').textContent = '저장 도구를 불러오지 못했어요. 인터넷 연결을 확인하거나 "인쇄"에서 PDF로 저장해 주세요.';
+  } finally {
+    btns.forEach((b) => { b.disabled = false; });
+  }
+}
+$('rpImg').addEventListener('click', () => saveAs('png'));
+$('rpPdf').addEventListener('click', () => saveAs('pdf'));
 
 setupZoom(document.querySelector('.photo-box'), canvas, $('btnZoom'));
 setupZoom($('profileBox'), $('pCanvas'), $('pBtnZoom'));
-initProfile({
+const profileApi = initProfile({
   getLandmarker: () => landmarker,
   // 정면 사진 분석 전이면 옆모습 값만 저장해 두고, 정면 분석 때 함께 반영
   onChange: (pm) => { state.pm = pm; if (state.m) scheduleAnalyze(); },
